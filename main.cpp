@@ -166,6 +166,9 @@ int main() {
     void *workspace;
     cudaStream_t stream;
     cudaEvent_t start, end;
+    const int repeat = 3;
+    const uint64_t flopsPerMatrixMul = 2 * m * n * k;
+    const uint64_t totalFlops = flopsPerMatrixMul * repeat;
     CHECK_CUDA(cudaMalloc(&workspace, workspaceSize));
     CHECK_CUDA(cudaMalloc(&aPrt, m * k * 1));
     CHECK_CUDA(cudaMemset(aPrt, 0, m * k * 1));
@@ -179,6 +182,7 @@ int main() {
 
     mixed_kernels::cublasLtFp8RowMajorNTNMeta::create(&instance, m, n, k, lda, ldb, ldc, workspaceSize, workspace);
 
+    // warm up
     for (int i = 0; i < 3; ++i) {
         mixed_kernels::cublasLtFp8RowMajorNTNMeta::matmul(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_32F);
     }
@@ -188,7 +192,7 @@ int main() {
     CHECK_CUDA(cudaEventRecord(start, stream));
 
     // Perform the operation you want to time
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < repeat; ++i) {
         mixed_kernels::cublasLtFp8RowMajorNTNMeta::matmul(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_32F);
     }
 
@@ -200,6 +204,9 @@ int main() {
     float milliseconds = 0;
     CHECK_CUDA(cudaEventElapsedTime(&milliseconds, start, end));
     std::cout << "Elapsed time: " << milliseconds << " ms\n";
+    const double elapsedSeconds = milliseconds / 1000.0f;
+    const double Gflops = totalFlops / elapsedSeconds / 1e9;
+    std::cout << "GFLOPS: " << Gflops << std::endl;
 
     CHECK_CUDA(cudaEventDestroy(end));
     CHECK_CUDA(cudaEventDestroy(start));
