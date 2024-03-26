@@ -1,3 +1,4 @@
+#include <cuda_runtime_api.h>
 #include <cublasLt.h>
 
 #include <iostream>
