@@ -169,6 +169,15 @@ int main() {
     const int repeat = 3;
     const uint64_t flopsPerMatrixMul = 2 * m * n * k;
     const uint64_t totalFlops = flopsPerMatrixMul * repeat;
+
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, 0);
+    std::cout << "CUDA Compute Capability: " << deviceProp.major << "." << deviceProp.minor << std::endl;
+    if (deviceProp.major < 9) {
+        printf("Your device does not support FP8");
+        return 1;
+    }
+
     CHECK_CUDA(cudaMalloc(&workspace, workspaceSize));
     CHECK_CUDA(cudaMalloc(&aPrt, m * k * 1));
     CHECK_CUDA(cudaMemset(aPrt, 0, m * k * 1));
