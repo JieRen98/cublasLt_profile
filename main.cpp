@@ -25,6 +25,7 @@ namespace mixed_kernels {
     namespace cublasLtFp8RowMajorNTNMeta {
         namespace {
             struct Impl {
+                constexpr static int searchAlgoNum = 10;
                 const uint64_t m, n, k;
                 const int64_t lda, ldb, ldc;
                 const std::size_t workspaceSize;
@@ -36,7 +37,8 @@ namespace mixed_kernels {
                 cublasLtMatmulDesc_t operationDesc{nullptr};
                 struct {
                     cublasLtMatrixLayout_t Cdesc{nullptr}, Ddesc{nullptr};
-                    cublasLtMatmulHeuristicResult_t heuristicResult{};
+                    cublasLtMatmulHeuristicResult_t heuristicResult[searchAlgoNum];
+                    int algoNum = searchAlgoNum;
                 } fp8fp8fp16{}, fp8fp8fp32{};
             };
         }  // namespace
@@ -49,7 +51,11 @@ namespace mixed_kernels {
 
         static CUBLASAPI cublasStatus_t CUBLASWINAPI
         matmul(void *instance, cudaStream_t stream, double alpha, const void *A,
-               const void *B, double beta, void *C, cudaDataType Ctype);
+               const void *B, double beta, void *C, cudaDataType Ctype, int algoIdx = 0);
+
+        static CUBLASAPI cublasStatus_t CUBLASWINAPI
+        getAlgoNum(void *instance, cudaStream_t stream, double alpha, const void *A,
+                   const void *B, double beta, void *C, cudaDataType Ctype, int *algoNum);
     }  // namespace cublasLtFp8RowMajorNTNMeta
 
     cublasStatus_t cublasLtFp8RowMajorNTNMeta::create(
@@ -86,8 +92,8 @@ namespace mixed_kernels {
                                                 n, m, ldc));
         CHECK_CUBLAS(cublasLtMatmulAlgoGetHeuristic(
                 impl->handle, impl->operationDesc, impl->Bdesc, impl->Adesc,
-                impl->fp8fp8fp16.Cdesc, impl->fp8fp8fp16.Ddesc, impl->preference, 1,
-                &impl->fp8fp8fp16.heuristicResult, &returnedResults));
+                impl->fp8fp8fp16.Cdesc, impl->fp8fp8fp16.Ddesc, impl->preference, impl->fp8fp8fp16.algoNum,
+                impl->fp8fp8fp16.heuristicResult, &impl->fp8fp8fp16.algoNum));
         if (returnedResults == 0) {
             CHECK_CUBLAS(CUBLAS_STATUS_NOT_SUPPORTED);
         }
@@ -98,8 +104,8 @@ namespace mixed_kernels {
                                                 n, m, ldc));
         CHECK_CUBLAS(cublasLtMatmulAlgoGetHeuristic(
                 impl->handle, impl->operationDesc, impl->Bdesc, impl->Adesc,
-                impl->fp8fp8fp32.Cdesc, impl->fp8fp8fp32.Ddesc, impl->preference, 1,
-                &impl->fp8fp8fp32.heuristicResult, &returnedResults));
+                impl->fp8fp8fp32.Cdesc, impl->fp8fp8fp32.Ddesc, impl->preference, impl->fp8fp8fp32.algoNum,
+                impl->fp8fp8fp32.heuristicResult, &impl->fp8fp8fp32.algoNum));
         if (returnedResults == 0) {
             CHECK_CUBLAS(CUBLAS_STATUS_NOT_SUPPORTED);
         }
@@ -109,7 +115,7 @@ namespace mixed_kernels {
 
     cublasStatus_t cublasLtFp8RowMajorNTNMeta::matmul(
             void *instance, cudaStream_t stream, double alpha, const void *A,
-            const void *B, double beta, void *C, cudaDataType Ctype) {
+            const void *B, double beta, void *C, cudaDataType Ctype, int algoIdx) {
         auto impl = static_cast<Impl *>(instance);
         float alphaFP32 = alpha;
         float betaFP32 = beta;
@@ -118,14 +124,32 @@ namespace mixed_kernels {
                 return cublasLtMatmul(impl->handle, impl->operationDesc, &alphaFP32, B,
                                       impl->Bdesc, A, impl->Adesc, &betaFP32, C,
                                       impl->fp8fp8fp32.Cdesc, C, impl->fp8fp8fp32.Ddesc,
-                                      &impl->fp8fp8fp32.heuristicResult.algo,
+                                      &impl->fp8fp8fp32.heuristicResult[algoIdx].algo,
                                       impl->workspace, impl->workspaceSize, stream);
             case CUDA_R_16F:
                 return cublasLtMatmul(impl->handle, impl->operationDesc, &alphaFP32, B,
                                       impl->Bdesc, A, impl->Adesc, &betaFP32, C,
                                       impl->fp8fp8fp16.Cdesc, C, impl->fp8fp8fp16.Ddesc,
-                                      &impl->fp8fp8fp16.heuristicResult.algo,
+                                      &impl->fp8fp8fp16.heuristicResult[algoIdx].algo,
                                       impl->workspace, impl->workspaceSize, stream);
+            default:
+                return CUBLAS_STATUS_NOT_SUPPORTED;
+        }
+    }
+
+    cublasStatus_t cublasLtFp8RowMajorNTNMeta::getAlgoNum(
+            void *instance, cudaStream_t stream, double alpha, const void *A,
+            const void *B, double beta, void *C, cudaDataType Ctype, int *algoNum) {
+        auto impl = static_cast<Impl *>(instance);
+        float alphaFP32 = alpha;
+        float betaFP32 = beta;
+        switch (Ctype) {
+            case CUDA_R_32F:
+                *algoNum = impl->fp8fp8fp32.algoNum;
+                return CUBLAS_STATUS_SUCCESS;
+            case CUDA_R_16F:
+                *algoNum = impl->fp8fp8fp16.algoNum;
+                return CUBLAS_STATUS_SUCCESS;
             default:
                 return CUBLAS_STATUS_NOT_SUPPORTED;
         }
@@ -196,26 +220,56 @@ int main() {
         mixed_kernels::cublasLtFp8RowMajorNTNMeta::matmul(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_32F);
     }
 
-    CHECK_CUDA(cudaStreamSynchronize(stream));
-
-    CHECK_CUDA(cudaEventRecord(start, stream));
-
-    // Perform the operation you want to time
-    for (int i = 0; i < repeat; ++i) {
-        mixed_kernels::cublasLtFp8RowMajorNTNMeta::matmul(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_32F);
+    // warm up
+    for (int i = 0; i < 3; ++i) {
+        mixed_kernels::cublasLtFp8RowMajorNTNMeta::matmul(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_16F);
     }
 
-    // Stop recording
-    CHECK_CUDA(cudaEventRecord(end, stream));
-    CHECK_CUDA(cudaEventSynchronize(end));
+    int algoNumFp32;
+    int algoNumFp16;
+    mixed_kernels::cublasLtFp8RowMajorNTNMeta::getAlgoNum(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_32F,
+                                                          &algoNumFp32);
+    mixed_kernels::cublasLtFp8RowMajorNTNMeta::getAlgoNum(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_16F,
+                                                          &algoNumFp16);
 
-    // Calculate and print the elapsed time
-    float milliseconds = 0;
-    CHECK_CUDA(cudaEventElapsedTime(&milliseconds, start, end));
-    std::cout << "Elapsed time: " << milliseconds << " ms\n";
-    const double elapsedSeconds = milliseconds / 1000.0f;
-    const double Gflops = totalFlops / elapsedSeconds / 1e9;
-    std::cout << "GFLOPS: " << Gflops << std::endl;
+    for (int i = 0; i < algoNumFp32; ++i) {
+        CHECK_CUDA(cudaStreamSynchronize(stream));
+        CHECK_CUDA(cudaEventRecord(start, stream));
+        for (int j = 0; j < repeat; ++j) {
+            mixed_kernels::cublasLtFp8RowMajorNTNMeta::matmul(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_32F);
+        }
+        CHECK_CUDA(cudaEventRecord(end, stream));
+        CHECK_CUDA(cudaEventSynchronize(end));
+
+        // Calculate and print the elapsed time
+        float milliseconds = 0;
+        CHECK_CUDA(cudaEventElapsedTime(&milliseconds, start, end));
+        std::cout << "---------------------------------" << std::endl;
+        std::cout << "FP32 Algo " << i << ": Elapsed time: " << milliseconds << " ms\n";
+        const double elapsedSeconds = milliseconds / 1000.0f;
+        const double Gflops = totalFlops / elapsedSeconds / 1e9;
+        std::cout << "GFLOPS: " << Gflops << std::endl;
+    }
+
+    for (int i = 0; i < algoNumFp16; ++i) {
+        CHECK_CUDA(cudaStreamSynchronize(stream));
+        CHECK_CUDA(cudaEventRecord(start, stream));
+        for (int j = 0; j < repeat; ++j) {
+            mixed_kernels::cublasLtFp8RowMajorNTNMeta::matmul(instance, stream, 1., aPrt, bPrt, 1., cPrt, CUDA_R_16F);
+        }
+        CHECK_CUDA(cudaEventRecord(end, stream));
+        CHECK_CUDA(cudaEventSynchronize(end));
+
+        // Calculate and print the elapsed time
+        float milliseconds = 0;
+        CHECK_CUDA(cudaEventElapsedTime(&milliseconds, start, end));
+        std::cout << "---------------------------------" << std::endl;
+        std::cout << "FP16 Algo " << i << ": Elapsed time: " << milliseconds << " ms\n";
+        const double elapsedSeconds = milliseconds / 1000.0f;
+        const double Gflops = totalFlops / elapsedSeconds / 1e9;
+        std::cout << "GFLOPS: " << Gflops << std::endl;
+    }
+    std::cout << "---------------------------------" << std::endl;
 
     CHECK_CUDA(cudaEventDestroy(end));
     CHECK_CUDA(cudaEventDestroy(start));
