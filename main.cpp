@@ -85,7 +85,6 @@ namespace mixed_kernels {
                 impl->operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &impl->transb,
                 sizeof(impl->transb)));
 
-        int returnedResults;
         CHECK_CUBLAS(cublasLtMatrixLayoutCreate(&impl->fp8fp8fp16.Cdesc, CUDA_R_16F,
                                                 n, m, ldc));
         CHECK_CUBLAS(cublasLtMatrixLayoutCreate(&impl->fp8fp8fp16.Ddesc, CUDA_R_16F,
@@ -94,7 +93,7 @@ namespace mixed_kernels {
                 impl->handle, impl->operationDesc, impl->Bdesc, impl->Adesc,
                 impl->fp8fp8fp16.Cdesc, impl->fp8fp8fp16.Ddesc, impl->preference, impl->fp8fp8fp16.algoNum,
                 impl->fp8fp8fp16.heuristicResult, &impl->fp8fp8fp16.algoNum));
-        if (returnedResults == 0) {
+        if (impl->fp8fp8fp16.algoNum == 0) {
             CHECK_CUBLAS(CUBLAS_STATUS_NOT_SUPPORTED);
         }
 
@@ -106,7 +105,7 @@ namespace mixed_kernels {
                 impl->handle, impl->operationDesc, impl->Bdesc, impl->Adesc,
                 impl->fp8fp8fp32.Cdesc, impl->fp8fp8fp32.Ddesc, impl->preference, impl->fp8fp8fp32.algoNum,
                 impl->fp8fp8fp32.heuristicResult, &impl->fp8fp8fp32.algoNum));
-        if (returnedResults == 0) {
+        if (impl->fp8fp8fp32.algoNum == 0) {
             CHECK_CUBLAS(CUBLAS_STATUS_NOT_SUPPORTED);
         }
         *instance = impl;
